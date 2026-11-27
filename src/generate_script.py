@@ -83,9 +83,9 @@ class ScriptGenerator:
     @retry_with_backoff(max_attempts=3, base_delay=5.0)
     def generate_script(self, topic: str) -> Dict[str, Any]:
         """生成单个脚本"""
-        system_prompt = self.templates["script_generation"]["system_prompt"]
-        user_prompt = self.templates["script_generation"]["user_prompt"].format(topic=topic)
-
+                system_prompt = self.templates["script_generation"]["system_prompt"]
+        # 使用 replace 避免 .format() 解析模板中的 JSON 大括号
+        user_prompt = self.templates["script_generation"]["user_prompt"].replace("{{topic}}", topic)
         logger.info(f"生成脚本: {topic[:30]}...")
 
         response = self.model.generate_content(
