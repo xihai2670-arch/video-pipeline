@@ -153,9 +153,9 @@ class ComplianceChecker:
         full_text = script.get("title", "") + " " + " ".join([s.get("narration", "") for s in script.get("scenes", [])])
 
         # 检查是否包含真人真事特征词
-        real_person_patterns = [
+                real_person_patterns = [
             r'\b\d{4}年\b',  # 具体年份
-            r'[张李王刘陈杨赵黄周吴徐孙胡朱高林何郭马罗梁宋郑谢韩唐冯于董萧程曹袁邓许傅沈曾彭吕苏卢蒋蔡贾丁魏薛叶阎余潘杜戴夏锺汪田任姜范方石姚谭廖邹熊金陆郝孔白崔康毛邱秦江史顾侯邵孟龙万段曹雷钱汤滕毕郗罗'],
+            # 常见姓氏（用于检测可能的真人姓名），仅作启发式参考
         ]
 
         # 检查知名 IP 关键词
