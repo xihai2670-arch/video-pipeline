@@ -9,26 +9,39 @@ from compliance import ComplianceChecker
 
 logger = logging.getLogger(__name__)
 
+# 尝试新版 google-genai SDK（推荐），回退到旧版
 try:
-    import google.generativeai as genai
+    from google import genai
+    GENAI_NEW = True
 except ImportError:
-    genai = None
-    logger.warning("google-generativeai 未安装，文案生成功能不可用")
+    GENAI_NEW = False
+    try:
+        import google.generativeai as genai_old
+    except ImportError:
+        genai_old = None
+    logger.warning("google-genai 未安装，尝试旧版 google-generativeai")
 
 
 class ScriptGenerator:
     """脚本生成器"""
 
     def __init__(self, api_key: str):
-        if genai is None:
-            raise RuntimeError("请安装 google-generativeai: pip install google-generativeai")
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        if GENAI_NEW:
+            # 新版 SDK: google-genai
+            self.client = genai.Client(api_key=api_key)
+            self.model_name = 'gemini-1.5-flash'
+        else:
+            # 旧版 SDK: google-generativeai (已弃用)
+            if genai_old is None:
+                raise RuntimeError("请安装 google-genai: pip install google-genai")
+            genai_old.configure(api_key=api_key)
+            self.model = genai_old.GenerativeModel('gemini-1.5-flash')
         self.templates = load_yaml(CONFIG_DIR / "prompt_templates.yaml")
         self.topics = self._load_topics()
         self.compliance = ComplianceChecker()
 
     def _load_topics(self) -> List[str]:
+        """加载种子选题库"""
         default_topics = [
             "老伴离世半年，独自种下的桃树今年开花了",
             "退休教师捡到流浪猫，照顾过程治愈了自己",
@@ -83,20 +96,36 @@ class ScriptGenerator:
 
         logger.info(f"生成脚本: {topic[:30]}...")
 
-        response = self.model.generate_content(
-            [system_prompt, user_prompt],
-            generation_config=genai.GenerationConfig(
-                temperature=0.8,
-                top_p=0.9,
-                top_k=40,
-                max_output_tokens=4096,
-                response_mime_type="application/json"
+        if GENAI_NEW:
+            # 新版 SDK
+            from google.genai import types
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=[system_prompt, user_prompt],
+                config=types.GenerateContentConfig(
+                    temperature=0.8,
+                    top_p=0.9,
+                    top_k=40,
+                    max_output_tokens=4096,
+                    response_mime_type="application/json"
+                )
             )
-        )
+            script = json.loads(response.text)
+        else:
+            # 旧版 SDK
+            response = self.model.generate_content(
+                [system_prompt, user_prompt],
+                generation_config=genai_old.GenerationConfig(
+                    temperature=0.8,
+                    top_p=0.9,
+                    top_k=40,
+                    max_output_tokens=4096,
+                    response_mime_type="application/json"
+                )
+            )
+            script = json.loads(response.text)
 
-        script = json.loads(response.text)
         script["topic"] = topic
-
         script = self._validate_and_fix(script)
         return script
 

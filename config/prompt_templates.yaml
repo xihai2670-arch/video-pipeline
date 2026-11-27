@@ -23,7 +23,7 @@ script_generation:
       "title": "视频标题（≤18字，含情感关键词，无违规词）",
       "cover_title": "封面大字标题（≤10字，视觉冲击力强）",
       "cover_subtitle": "封面小字副标题（≤15字，补充说明）",
-           "scenes": [
+      "scenes": [
         {
           "index": 1,
           "duration": 5,

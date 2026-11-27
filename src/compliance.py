@@ -152,7 +152,6 @@ class ComplianceChecker:
         issues = []
         full_text = script.get("title", "") + " " + " ".join([s.get("narration", "") for s in script.get("scenes", [])])
 
-                # 检查知名 IP 关键词
         # 检查知名 IP 关键词
         ip_keywords = [
             "哈利波特", "漫威", "迪士尼", "皮克斯", "吉卜力", "宫崎骏",
