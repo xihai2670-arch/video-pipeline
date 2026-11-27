@@ -30,7 +30,6 @@ class ScriptGenerator:
 
     def _load_topics(self) -> List[str]:
         """加载种子选题库"""
-        # 内置备选题库（如果没有外部文件）
         default_topics = [
             "老伴离世半年，独自种下的桃树今年开花了",
             "退休教师捡到流浪猫，照顾过程治愈了自己",
@@ -63,7 +62,6 @@ class ScriptGenerator:
             "老船工讲三十年河上往事，录成有声书留给后人",
             "老茶农守着百年茶树，说慢工出细活日子也是熬出来的",
         ]
-        # 尝试从文件加载
         topics_file = CONFIG_DIR / "topics.txt"
         if topics_file.exists():
             from utils import load_text_lines
@@ -73,19 +71,17 @@ class ScriptGenerator:
         return default_topics
 
     def pick_topic(self, used_topics: Optional[List[str]] = None) -> str:
-        """随机选取一个未用过的题目"""
         used = set(used_topics or [])
         available = [t for t in self.topics if t not in used]
         if not available:
-            available = self.topics  # 全用完了就允许重复
+            available = self.topics
         return random.choice(available)
 
     @retry_with_backoff(max_attempts=3, base_delay=5.0)
     def generate_script(self, topic: str) -> Dict[str, Any]:
-        """生成单个脚本"""
-                system_prompt = self.templates["script_generation"]["system_prompt"]
-        # 使用 replace 避免 .format() 解析模板中的 JSON 大括号
+        system_prompt = self.templates["script_generation"]["system_prompt"]
         user_prompt = self.templates["script_generation"]["user_prompt"].replace("{{topic}}", topic)
+
         logger.info(f"生成脚本: {topic[:30]}...")
 
         response = self.model.generate_content(
@@ -99,24 +95,18 @@ class ScriptGenerator:
             )
         )
 
-        # 解析 JSON
         script = json.loads(response.text)
-        script["topic"] = topic  # 保存原始题目
+        script["topic"] = topic
 
-        # 基础字段校验
         script = self._validate_and_fix(script)
-
         return script
 
     def _validate_and_fix(self, script: Dict[str, Any]) -> Dict[str, Any]:
-        """校验并修正脚本结构"""
-        # 确保必要字段存在
         required = ["title", "cover_title", "cover_subtitle", "scenes", "bgm_mood", "tags"]
         for field in required:
             if field not in script:
                 script[field] = "" if field != "scenes" else []
 
-        # 确保 6 个场景
         scenes = script.get("scenes", [])
         while len(scenes) < 6:
             scenes.append({
@@ -129,7 +119,6 @@ class ScriptGenerator:
             })
         script["scenes"] = scenes[:6]
 
-        # 修正场景索引
         for i, scene in enumerate(script["scenes"]):
             scene["index"] = i + 1
             scene["duration"] = 5
@@ -137,7 +126,6 @@ class ScriptGenerator:
         return script
 
     def generate_with_compliance(self, topic: str, max_retries: int = 3) -> Dict[str, Any]:
-        """生成并合规检查，不通过则重试"""
         for attempt in range(max_retries):
             script = self.generate_script(topic)
             compliance_result = self.compliance.check_script(script)
@@ -153,10 +141,8 @@ class ScriptGenerator:
                         logger.warning(f"  - {issue['detail']} @ {issue['location']}")
 
                 if attempt < max_retries - 1:
-                    # 尝试换个题目重新生成
                     topic = self.pick_topic([topic])
 
-        # 最终仍不通过，返回最后一次结果但标记
         script["compliance"] = compliance_result
         script["compliance_warning"] = "合规检查未通过，请人工复核"
         return script
