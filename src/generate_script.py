@@ -23,13 +23,12 @@ class ScriptGenerator:
         if genai is None:
             raise RuntimeError("请安装 google-generativeai: pip install google-generativeai")
         genai.configure(api_key=api_key)
-                self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
         self.templates = load_yaml(CONFIG_DIR / "prompt_templates.yaml")
         self.topics = self._load_topics()
         self.compliance = ComplianceChecker()
 
     def _load_topics(self) -> List[str]:
-        """加载种子选题库"""
         default_topics = [
             "老伴离世半年，独自种下的桃树今年开花了",
             "退休教师捡到流浪猫，照顾过程治愈了自己",
