@@ -29,7 +29,7 @@ class ScriptGenerator:
         if GENAI_NEW:
             # 新版 SDK: google-genai
             self.client = genai.Client(api_key=api_key)
-            self.model_name = 'gemini-1.5-flash'
+            self.model_name = 'gemini-2.0-flash-exp'
         else:
             # 旧版 SDK: google-generativeai (已弃用)
             if genai_old is None:
