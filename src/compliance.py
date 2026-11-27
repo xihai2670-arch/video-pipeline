@@ -152,12 +152,7 @@ class ComplianceChecker:
         issues = []
         full_text = script.get("title", "") + " " + " ".join([s.get("narration", "") for s in script.get("scenes", [])])
 
-        # 检查是否包含真人真事特征词
-                real_person_patterns = [
-            r'\b\d{4}年\b',  # 具体年份
-            # 常见姓氏（用于检测可能的真人姓名），仅作启发式参考
-        ]
-
+                # 检查知名 IP 关键词
         # 检查知名 IP 关键词
         ip_keywords = [
             "哈利波特", "漫威", "迪士尼", "皮克斯", "吉卜力", "宫崎骏",
