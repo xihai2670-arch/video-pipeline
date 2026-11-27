@@ -23,7 +23,7 @@ script_generation:
       "title": "视频标题（≤18字，含情感关键词，无违规词）",
       "cover_title": "封面大字标题（≤10字，视觉冲击力强）",
       "cover_subtitle": "封面小字副标题（≤15字，补充说明）",
-      "scenes": [
+           "scenes": [
         {
           "index": 1,
           "duration": 5,
@@ -31,8 +31,8 @@ script_generation:
           "image_prompt": "配图提示词（英文，SDXL/FLUX 风格，9:16构图，写实/温情风，细节丰富）",
           "video_prompt": "视频生成提示词（英文，LTX-Video i2v 风格，描述动作/镜头运动/氛围）",
           "subtitle": "字幕文案（≤20字，同步旁白关键句）"
-        },
-        ... 共 6 个场景（每个 5 秒，总 30 秒）
+        }
+        // 共 6 个场景，每个 5 秒，总 30 秒
       ],
       "bgm_mood": "背景音乐情绪（如：温馨怀旧/平静治愈/深情感人/轻快温暖）",
       "tags": ["标签1", "标签2", "标签3"]
