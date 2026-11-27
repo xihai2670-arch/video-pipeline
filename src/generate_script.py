@@ -29,9 +29,15 @@ class ScriptGenerator:
         if GENAI_NEW:
             # 新版 SDK: google-genai
             self.client = genai.Client(api_key=api_key)
-            self.model_name = 'gemini-2.0-flash-exp'
-        else:
-            # 旧版 SDK: google-generativeai (已弃用)
+            # 尝试多个模型名，按优先级排序
+            self.model_names = [
+                'gemini-1.5-flash-002',    # 稳定版
+                'gemini-1.5-pro-002',      # 稳定版 Pro
+                'gemini-1.0-pro',          # 旧版稳定
+                'gemini-1.5-flash',        # 通用名
+                'gemini-2.0-flash-exp',    # 实验版
+            ]
+            self.model_name = self.model_names[0]
             if genai_old is None:
                 raise RuntimeError("请安装 google-genai: pip install google-genai")
             genai_old.configure(api_key=api_key)
@@ -97,22 +103,33 @@ class ScriptGenerator:
         logger.info(f"生成脚本: {topic[:30]}...")
 
         if GENAI_NEW:
-            # 新版 SDK
+            # 新版 SDK：尝试多个模型名
             from google.genai import types
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=[system_prompt, user_prompt],
-                config=types.GenerateContentConfig(
-                    temperature=0.8,
-                    top_p=0.9,
-                    top_k=40,
-                    max_output_tokens=4096,
-                    response_mime_type="application/json"
-                )
-            )
-            script = json.loads(response.text)
-        else:
-            # 旧版 SDK
+            last_error = None
+            for model_name in self.model_names:
+                try:
+                    logger.info(f"尝试模型: {model_name}")
+                    response = self.client.models.generate_content(
+                        model=model_name,
+                        contents=[system_prompt, user_prompt],
+                        config=types.GenerateContentConfig(
+                            temperature=0.8,
+                            top_p=0.9,
+                            top_k=40,
+                            max_output_tokens=4096,
+                            response_mime_type="application/json"
+                        )
+                    )
+                    script = json.loads(response.text)
+                    logger.info(f"模型 {model_name} 调用成功")
+                    break
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"模型 {model_name} 调用失败: {e}")
+                    continue
+            else:
+                # 所有模型都失败了
+                raise last_error or RuntimeError("所有模型均调用失败")
             response = self.model.generate_content(
                 [system_prompt, user_prompt],
                 generation_config=genai_old.GenerationConfig(
