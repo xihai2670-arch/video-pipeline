@@ -23,7 +23,7 @@ class ScriptGenerator:
         if genai is None:
             raise RuntimeError("请安装 google-generativeai: pip install google-generativeai")
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.model = genai.GenerativeModel('models/gemini-1.5-flash')
         self.templates = load_yaml(CONFIG_DIR / "prompt_templates.yaml")
         self.topics = self._load_topics()
         self.compliance = ComplianceChecker()
