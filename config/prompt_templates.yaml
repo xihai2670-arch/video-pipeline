@@ -1,0 +1,121 @@
+# Prompt 模板配置
+# 所有模板使用 Jinja2 语法，变量在运行时注入
+
+script_generation:
+  system_prompt: |
+    你是一个专门为视频号中老年受众创作短视频故事文案的专家。
+    目标受众：50-75 岁，以女性为主，喜欢温情、怀旧、亲情、生活智慧、时代记忆类内容。
+    核心要求：
+    1. 故事真实感人，有细节，有画面感，避免说教
+    2. 30 秒视频 ≈ 450-550 字旁白（语速约 260 字/分）
+    3. 结构：钩子(3s) → 铺垫(7s) → 高潮(10s) → 回味/升华(10s)
+    4. 严禁违规内容：政治、色情、赌博、诈骗、医疗承诺、金融诱导、违规营销
+    5. 严禁版权风险：不引用具体真人真事、不使用知名IP、音乐/BGM需版权清晰
+    6. 输出必须为结构化 JSON，字段见 user_prompt 要求
+
+  user_prompt: |
+    请根据以下故事核心，创作一个 30 秒视频号短视频文案：
+
+    故事核心：{{topic}}
+
+    输出 JSON 格式（严格遵守，无额外文本）：
+    {
+      "title": "视频标题（≤18字，含情感关键词，无违规词）",
+      "cover_title": "封面大字标题（≤10字，视觉冲击力强）",
+      "cover_subtitle": "封面小字副标题（≤15字，补充说明）",
+      "scenes": [
+        {
+          "index": 1,
+          "duration": 5,
+          "narration": "旁白文案（约75字，口语化，有画面感）",
+          "image_prompt": "配图提示词（英文，SDXL/FLUX 风格，9:16构图，写实/温情风，细节丰富）",
+          "video_prompt": "视频生成提示词（英文，LTX-Video i2v 风格，描述动作/镜头运动/氛围）",
+          "subtitle": "字幕文案（≤20字，同步旁白关键句）"
+        },
+        ... 共 6 个场景（每个 5 秒，总 30 秒）
+      ],
+      "bgm_mood": "背景音乐情绪（如：温馨怀旧/平静治愈/深情感人/轻快温暖）",
+      "tags": ["标签1", "标签2", "标签3"]
+    }
+
+    要求：
+    - 6 个场景时长固定 5 秒，总计 30 秒
+    - 旁白总字数 450-550 字
+    - image_prompt 和 video_prompt 必须英文，便于模型理解
+    - 画面描写要具体：人物外貌、动作、表情、环境、光影、构图
+    - 避免抽象词，多用具象意象（如："皱纹爬满眼角" 而非 "显老"）
+
+image_generation:
+  system_prompt: |
+    你是专业的 AI 绘画提示词工程师，擅长为中老年题材短视频生成分镜配图提示词。
+
+  user_prompt: |
+    基于以下场景描述，生成一个高质量的 FLUX/SDXL 文生图提示词（英文）：
+
+    场景：{{scene_description}}
+    画面关键元素：{{key_elements}}
+    情绪基调：{{mood}}
+    构图比例：9:16 (1024x1820)
+    风格要求：写实、温情、电影感光影、细节丰富、中老年人物特征明显
+
+    输出仅提示词字符串，无额外说明。
+
+video_generation:
+  system_prompt: |
+    你是专业的 AI 视频生成提示词工程师，擅长 LTX-Video / CogVideoX 图生视频提示词。
+
+  user_prompt: |
+    基于以下首帧图像描述，生成 LTX-Video 图生视频提示词（英文）：
+
+    首帧描述：{{first_frame_description}}
+    期望动作：{{desired_motion}}
+    镜头运动：{{camera_movement}}
+    时长：5 秒，8 FPS
+    氛围：{{mood}}
+
+    输出仅提示词字符串，无额外说明。
+
+cover_generation:
+  system_prompt: |
+    你是专业的短视频封面设计师，擅长为中老年赛道生成高点击率封面图提示词。
+
+  user_prompt: |
+    生成一个 3:4 (1080x1440) 视频封面图提示词（英文）：
+
+    核心主题：{{topic}}
+    封面大标题：{{cover_title}}
+    封面小标题：{{cover_subtitle}}
+    视觉风格：温情、怀旧、电影感、留白用于叠加文字
+    关键视觉元素：{{key_visual_elements}}
+    色调：暖色调为主（橙/黄/红/棕），对比度适中
+
+    输出仅提示词字符串，无额外说明。
+
+compliance_check:
+  system_prompt: |
+    你是视频号内容合规审核专家，熟知平台所有违规红线。
+
+  user_prompt: |
+    请对以下内容进行合规审核，输出 JSON：
+
+    标题：{{title}}
+    封面标题：{{cover_title}}
+    封面副标题：{{cover_subtitle}}
+    旁白全文：{{full_narration}}
+    字幕列表：{{subtitles}}
+    标签：{{tags}}
+
+    检查维度：
+    1. 敏感词匹配（政治、色情、赌博、诈骗、医疗、金融、营销等）
+    2. 版权风险（真人真事、知名IP、音乐版权）
+    3. 平台规则（标题长度、诱导关注、硬广、虚假宣传）
+    4. 价值观导向（正能量、无低俗、无暴力、无歧视）
+
+    输出 JSON：
+    {
+      "passed": true/false,
+      "issues": [
+        {"type": "sensitive_word|copyright|platform_rule|value", "severity": "high|medium|low", "detail": "具体问题描述", "location": "出现位置"}
+      ],
+      "suggestions": ["修改建议1", "修改建议2"]
+    }

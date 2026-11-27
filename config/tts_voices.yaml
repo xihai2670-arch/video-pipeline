@@ -1,0 +1,101 @@
+# Edge TTS 音色映射（中老年叙事风）
+# 使用：edge-tts 库本地合成，无需联网 API
+# 语音列表来源：edge-tts --list-voices
+
+voices:
+  # 温和磁性男声（适合深情讲述、回忆录类）
+  warm_male:
+    - name: "zh-CN-Yunxi"
+      label: "云希 - 温和磁性大叔音"
+      gender: "male"
+      age_group: "middle_aged"
+      style: "warm_narrative"
+      rate: "+0%"
+      volume: "+0%"
+      pitch: "+0Hz"
+      description: "最推荐：声音沉稳有磁性，像老友讲故事，适合亲情/怀旧/时代记忆类"
+
+    - name: "zh-CN-Yunyang"
+      label: "云扬 - 成熟稳重男声"
+      gender: "male"
+      age_group: "senior"
+      style: "serious_narrative"
+      rate: "-5%"
+      volume: "+0%"
+      pitch: "-10Hz"
+      description: "更老成的声音，适合严肃、厚重的历史/人生感悟类"
+
+    - name: "zh-CN-Yunhao"
+      label: "云浩 - 亲切自然男声"
+      gender: "male"
+      age_group: "middle_aged"
+      style: "friendly_narrative"
+      rate: "+0%"
+      volume: "+0%"
+      pitch: "+0Hz"
+      description: "像邻家大哥，适合生活智慧/邻里故事类"
+
+  # 慈祥温柔女声（适合温情治愈、细腻情感类）
+  warm_female:
+    - name: "zh-CN-Xiaoxiao"
+      label: "晓晓 - 慈祥温柔阿姨音"
+      gender: "female"
+      age_group: "senior"
+      style: "gentle_narrative"
+      rate: "-5%"
+      volume: "+0%"
+      pitch: "+10Hz"
+      description: "最推荐：声音软糯慈祥，像奶奶讲故事，适合亲情/治愈/生活细节类"
+
+    - name: "zh-CN-Xiaoyi"
+      label: "晓伊 - 知性优雅女声"
+      gender: "female"
+      age_group: "middle_aged"
+      style: "elegant_narrative"
+      rate: "+0%"
+      volume: "+0%"
+      pitch: "+0Hz"
+      description: "更知性优雅，适合文化/艺术/阅读分享类"
+
+    - name: "zh-CN-Xiaohan"
+      label: "晓涵 - 沉静深情女声"
+      gender: "female"
+      age_group: "middle_aged"
+      style: "deep_narrative"
+      rate: "-10%"
+      volume: "+0%"
+      pitch: "-5Hz"
+      description: "语速更慢、更深情，适合感人至深的故事类"
+
+  # 方言/地方腔（可选，增强真实感）
+  dialect:
+    - name: "zh-CN-shaanxi-Xiaoni"
+      label: "陕西晓妮 - 陕西话女声"
+      gender: "female"
+      age_group: "middle_aged"
+      style: "dialect_narrative"
+      rate: "+0%"
+      volume: "+0%"
+      pitch: "+0Hz"
+      description: "西安话，适合西北风土人情类故事"
+
+    - name: "zh-CN-sichuan-Yunxi"
+      label: "四川云希 - 四川话男声"
+      gender: "male"
+      age_group: "middle_aged"
+      style: "dialect_narrative"
+      rate: "+0%"
+      volume: "+0%"
+      pitch: "+0Hz"
+      description: "四川话，适合巴蜀风情/茶馆故事类"
+
+# 默认音色策略：按故事类型自动匹配
+default_strategy:
+  "亲情温情": "zh-CN-Xiaoxiao"
+  "生活智慧": "zh-CN-Yunxi"
+  "时代记忆": "zh-CN-Yunyang"
+  "default": "zh-CN-Yunxi"
+
+# 语速参考：中老年受众建议 -5% 到 -10%
+# 音量建议：+0% 到 +5%（确保清晰）
+# 音调建议：男声 -10Hz 到 +0Hz，女声 +0Hz 到 +10Hz
