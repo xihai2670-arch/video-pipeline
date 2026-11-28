@@ -1,3 +1,35 @@
+# 顶部新增
+try:
+    from openai import OpenAI
+    SILICONFLOW_AVAILABLE = True
+except ImportError:
+    SILICONFLOW_AVAILABLE = False
+
+class ScriptGenerator:
+    def __init__(self, api_key: str, siliconflow_key: str = None):
+        self.siliconflow_key = siliconflow_key or os.getenv("SILICONFLOW_API_KEY")
+        self.use_siliconflow = SILICONFLOW_AVAILABLE and bool(self.siliconflow_key)
+        if self.use_siliconflow:
+            self.sf_client = OpenAI(
+                api_key=self.siliconflow_key,
+                base_url="https://api.siliconflow.cn/v1"  # OpenAI 兼容端点
+            )
+            self.sf_model = "Qwen/Qwen2.5-72B-Instruct"  # 或 Qwen/Qwen2.5-32B-Instruct
+            logger.info("使用 SiliconFlow (Qwen2.5-72B) 生成脚本")
+        # ... 其余回退逻辑不变
+    
+    def _generate_with_siliconflow(self, system_prompt, user_prompt, topic):
+        response = self.sf_client.chat.completions.create(
+            model=self.sf_model,
+            messages=[{"role": "system", "content": system_prompt},
+                      {"role": "user", "content": user_prompt}],
+            temperature=0.8,
+            max_tokens=4096,
+            response_format={"type": "json_object"}
+        )
+        script = json.loads(response.choices[0].message.content)
+        script["topic"] = topic
+        return self._validate_and_fix(script)
 """文案生成模块 - 使用 Gemini 生成结构化短视频脚本"""
 import json
 import logging
