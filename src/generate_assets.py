@@ -1,4 +1,4 @@
-"""素材生成模块 - 图片、视频、音频并发生成"""
+"""素材生成模块 - 图片、视频、音频并发生成 (最终版：全模型回退+容错)"""
 import os
 import json
 import logging
@@ -65,26 +65,27 @@ class AssetPaths:
 
 
 class SiliconFlowImageGenerator:
-    """SiliconFlow 文生图 (OpenAI 兼容 API，国内直连)"""
+    """SiliconFlow 文生图 - 多模型回退 + 响应格式兼容 + 403自动跳过"""
 
     def __init__(self, api_key: str):
         self.client = OpenAI(
             api_key=api_key,
-            base_url="https://api.siliconflow.cn/v1"
+            base_url="https://api.siliconflow.cn/v1",
+            timeout=60.0,
+            max_retries=0  # 我们自己处理重试
         )
-        # 尝试多个模型（按优先级，避免单个模型被禁用）
+        # 按可用性排序：Kolors(中文友好) > SDXL > SDXL-Turbo > FLUX.1-dev
         self.models = [
-            "stabilityai/stable-diffusion-xl-base-1.0",  # SDXL 基础版，通常可用
-            "stabilityai/sdxl-turbo",                     # SDXL Turbo，快
-            "Kwai-Kolors/Kolors",                          # 可图，中文友好
-            "black-forest-labs/FLUX.1-dev",               # FLUX.1-dev 备选
+            "Kwai-Kolors/Kolors",
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "stabilityai/sdxl-turbo",
+            "black-forest-labs/FLUX.1-dev",
         ]
-        self.current_model_idx = 0
 
-    @retry_with_backoff(max_attempts=3, base_delay=3.0)
     def generate(self, prompt: str, width: int = 1024, height: int = 1820) -> bytes:
-        """生成图片，返回二进制数据"""
+        """生成图片，内置多模型回退 + 响应格式兼容"""
         last_error = None
+        
         for model in self.models:
             try:
                 logger.info(f"尝试 SiliconFlow 模型: {model}")
@@ -95,22 +96,49 @@ class SiliconFlowImageGenerator:
                     response_format="b64_json",
                     n=1
                 )
-                image_b64 = response.data[0].b64_json
-                logger.info(f"SiliconFlow 模型 {model} 生成成功")
-                return base64.b64decode(image_b64)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"SiliconFlow 模型 {model} 失败: {e}")
-                # 如果是 403 Model disabled，尝试下一个模型
-                if "403" in str(e) or "Model disabled" in str(e) or "disabled" in str(e).lower():
+                
+                # 兼容不同响应格式
+                image_b64 = None
+                image_url = None
+                
+                if response.data and len(response.data) > 0:
+                    data = response.data[0]
+                    
+                    # 优先尝试 b64_json
+                    if hasattr(data, 'b64_json') and data.b64_json:
+                        image_b64 = data.b64_json
+                    # 备选：url 字段
+                    elif hasattr(data, 'url') and data.url:
+                        image_url = data.url
+                
+                if image_b64:
+                    logger.info(f"SiliconFlow 模型 {model} 生成成功 (b64_json)")
+                    return base64.b64decode(image_b64)
+                elif image_url:
+                    logger.info(f"SiliconFlow 模型 {model} 生成成功 (url 下载)")
+                    import requests
+                    resp = requests.get(image_url, timeout=30)
+                    resp.raise_for_status()
+                    return resp.content
+                else:
+                    logger.warning(f"SiliconFlow 模型 {model} 响应无图片数据: {response}")
                     continue
-                # 其他错误也尝试下一个模型
+                    
+            except Exception as e:
+                error_str = str(e)
+                logger.warning(f"SiliconFlow 模型 {model} 失败: {e}")
+                
+                # 任何错误都尝试下一个模型（包括 403、400、网络错误等）
+                if "403" in error_str or "Model disabled" in error_str or "disabled" in error_str.lower() \
+                   or "400" in error_str or "401" in error_str or "429" in error_str:
+                    continue
                 continue
-        raise last_error or RuntimeError("所有 SiliconFlow 模型均失败")
+                
+        raise RuntimeError(f"所有 SiliconFlow 模型均失败，最后错误: {last_error}")
 
 
 class CloudflareImageGenerator:
-    """Cloudflare Workers AI 文生图 (备选)"""
+    """Cloudflare Workers AI 文生图 - 多模型 + 参数自适应 + 400重试"""
 
     def __init__(self, account_id: str, api_token: str):
         self.account_id = account_id
@@ -120,26 +148,59 @@ class CloudflareImageGenerator:
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json"
         }
-        self.model = "@cf/black-forest-labs/flux-1-schnell"
+        self.models = [
+            "@cf/black-forest-labs/flux-1-schnell",
+            "@cf/stabilityai/stable-diffusion-xl-base-1.0",
+        ]
 
-    @retry_with_backoff(max_attempts=3, base_delay=3.0)
     def generate(self, prompt: str, width: int = 1024, height: int = 1820) -> bytes:
-        """生成图片，返回二进制数据"""
-        url = f"{self.base_url}/{self.model}"
-        payload = {
-            "prompt": prompt,
-            "width": width,
-            "height": height,
-            "num_inference_steps": 4,
-            "guidance_scale": 3.5
-        }
-        response = requests.post(url, headers=self.headers, json=payload, timeout=60)
-        response.raise_for_status()
-        result = response.json()
-        if not result.get("success"):
-            raise RuntimeError(f"Cloudflare AI 返回错误: {result}")
-        image_b64 = result["result"]["image"]
-        return base64.b64decode(image_b64)
+        last_error = None
+        
+        for model in self.models:
+            try:
+                logger.info(f"尝试 Cloudflare 模型: {model}")
+                url = f"{self.base_url}/{model}"
+                
+                # Cloudflare 通常支持正方形，强制正方形避免 400
+                cf_size = min(max(width, height), 1024)
+                cf_size = max(cf_size, 512)
+                # 对齐到 64 的倍数
+                cf_size = (cf_size // 64) * 64
+                
+                payload = {
+                    "prompt": prompt,
+                    "width": cf_size,
+                    "height": cf_size,
+                    "num_inference_steps": 4,
+                    "guidance_scale": 3.5
+                }
+                
+                response = requests.post(url, headers=self.headers, json=payload, timeout=60)
+                
+                if response.status_code == 400:
+                    logger.warning(f"Cloudflare 400: {response.text[:200]}")
+                    # 简化参数重试
+                    simple_payload = {"prompt": prompt}
+                    response = requests.post(url, headers=self.headers, json=simple_payload, timeout=60)
+                
+                response.raise_for_status()
+                result = response.json()
+                
+                if not result.get("success"):
+                    raise RuntimeError(f"Cloudflare AI 返回错误: {result}")
+                
+                image_b64 = result.get("result", {}).get("image")
+                if not image_b64:
+                    raise RuntimeError(f"Cloudflare 无图片数据: {result}")
+                
+                logger.info(f"Cloudflare 模型 {model} 生成成功")
+                return base64.b64decode(image_b64)
+                
+            except Exception as e:
+                logger.warning(f"Cloudflare 模型 {model} 失败: {e}")
+                continue
+                
+        raise RuntimeError("所有 Cloudflare 模型均失败")
 
 
 class ImageGenerator:
@@ -148,20 +209,16 @@ class ImageGenerator:
     def __init__(self, siliconflow_key: str = None, cf_account_id: str = None, cf_api_token: str = None):
         self.generators = []
         
-        # 优先 SiliconFlow
         if siliconflow_key:
             self.generators.append(("SiliconFlow", SiliconFlowImageGenerator(siliconflow_key)))
         
-        # 备选 Cloudflare
         if cf_account_id and cf_api_token:
             self.generators.append(("Cloudflare", CloudflareImageGenerator(cf_account_id, cf_api_token)))
         
         if not self.generators:
             raise RuntimeError("至少需要配置 SiliconFlow 或 Cloudflare 其中一个")
 
-    @retry_with_backoff(max_attempts=3, base_delay=3.0)
     def generate(self, prompt: str, width: int = 1024, height: int = 1820) -> bytes:
-        """尝试所有生成器，直到成功"""
         last_error = None
         for name, gen in self.generators:
             try:
@@ -341,6 +398,48 @@ class AssetGenerator:
         logger.info("BGM 占位文件已生成（静音），建议替换为版权清晰的音乐")
 
 
+@dataclass
+class AssetPaths:
+    run_dir: Path
+    script: Dict[str, Any]
+
+    @property
+    def images_dir(self) -> Path:
+        p = self.run_dir / "images"
+        p.mkdir(exist_ok=True)
+        return p
+
+    @property
+    def videos_dir(self) -> Path:
+        p = self.run_dir / "videos"
+        p.mkdir(exist_ok=True)
+        return p
+
+    @property
+    def audio_dir(self) -> Path:
+        p = self.run_dir / "audio"
+        p.mkdir(exist_ok=True)
+        return p
+
+    def image_path(self, scene_idx: int) -> Path:
+        return self.images_dir / f"scene_{scene_idx:02d}.png"
+
+    def video_path(self, scene_idx: int) -> Path:
+        return self.videos_dir / f"scene_{scene_idx:02d}.mp4"
+
+    def audio_path(self, scene_idx: int) -> Path:
+        return self.audio_dir / f"scene_{scene_idx:02d}.mp3"
+
+    def cover_path(self) -> Path:
+        return self.run_dir / "cover.jpg"
+
+    def final_video_path(self) -> Path:
+        return self.run_dir / "final_video.mp4"
+
+    def bgm_path(self) -> Path:
+        return self.run_dir / "bgm.mp3"
+
+
 if __name__ == "__main__":
     import os
     from dotenv import load_dotenv
@@ -355,7 +454,6 @@ if __name__ == "__main__":
         print("请设置 SILICONFLOW_API_KEY 或 CF_ACCOUNT_ID+CF_API_TOKEN")
         exit(1)
 
-    # 测试配图
     img_gen = ImageGenerator(siliconflow_key=sf_key, cf_account_id=cf_id, cf_api_token=cf_token)
     img = img_gen.generate("elderly couple drinking tea in garden, warm sunset, cinematic")
     Path("test_image.png").write_bytes(img)
