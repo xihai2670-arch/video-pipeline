@@ -262,10 +262,19 @@ class VideoGenerator:
 
 
 class TTSGenerator:
-    """Edge TTS 本地语音合成"""
+    """Edge TTS 本地语音合成 - 多音色回退"""
 
     def __init__(self):
         self.voices_config = self._load_voices()
+        # 按优先级排序的备选音色（按类别分组）
+        self.fallback_voices = [
+            "zh-CN-Xiaoxiao",    # 慈祥女声
+            "zh-CN-Xiaoyi",      # 知性女声
+            "zh-CN-Xiaohan",     # 深情女声
+            "zh-CN-Yunxi",       # 磁性男声
+            "zh-CN-Yunyang",     # 稳重男声
+            "zh-CN-Yunhao",      # 亲切男声
+        ]
 
     def _load_voices(self) -> Dict:
         import yaml
@@ -274,25 +283,53 @@ class TTSGenerator:
 
     def pick_voice(self, topic_category: str = "default") -> Dict:
         strategy = self.voices_config.get("default_strategy", {})
-        voice_name = strategy.get(topic_category, strategy.get("default", "zh-CN-Yunxi"))
+        preferred_name = strategy.get(topic_category, strategy.get("default", "zh-CN-Yunxi"))
+        
+        # 先尝试首选音色
         for category in ["warm_male", "warm_female", "dialect"]:
             for v in self.voices_config["voices"][category]:
-                if v["name"] == voice_name:
+                if v["name"] == preferred_name:
+                    logger.info(f"使用首选音色: {preferred_name}")
                     return v
+        
+        # 首选不可用，尝试备选
+        logger.warning(f"首选音色 {preferred_name} 不可用，尝试备选...")
+        for fallback_name in self.fallback_voices:
+            for category in ["warm_male", "warm_female", "dialect"]:
+                for v in self.voices_config["voices"][category]:
+                    if v["name"] == fallback_name:
+                        logger.info(f"使用备选音色: {fallback_name}")
+                        return v
+        
+        # 兜底：返回第一个可用的
         return self.voices_config["voices"]["warm_male"][0]
 
-    async def synthesize(self, text: str, voice_config: Dict, output_path: Path) -> None:
-        communicate = edge_tts.Communicate(
-            text=text,
-            voice=voice_config["name"],
-            rate=voice_config.get("rate", "+0%"),
-            volume=voice_config.get("volume", "+0%"),
-            pitch=voice_config.get("pitch", "+0Hz")
-        )
-        await communicate.save(str(output_path))
+    async def _synthesize_with_fallback(self, text: str, voice_config: Dict, output_path: Path) -> None:
+        """尝试多个音色合成，直到成功"""
+        voice_names = [voice_config["name"]] + [v for v in self.fallback_voices if v != voice_config["name"]]
+        
+        last_error = None
+        for voice_name in voice_names:
+            try:
+                logger.info(f"尝试 TTS 音色: {voice_name}")
+                communicate = edge_tts.Communicate(
+                    text=text,
+                    voice=voice_name,
+                    rate=voice_config.get("rate", "+0%"),
+                    volume=voice_config.get("volume", "+0%"),
+                    pitch=voice_config.get("pitch", "+0Hz")
+                )
+                await communicate.save(str(output_path))
+                logger.info(f"TTS 音色 {voice_name} 合成成功")
+                return
+            except Exception as e:
+                logger.warning(f"TTS 音色 {voice_name} 失败: {e}")
+                continue
+        
+        raise RuntimeError(f"所有 TTS 音色均失败: {last_error}")
 
     def synthesize_sync(self, text: str, voice_config: Dict, output_path: Path) -> None:
-        asyncio.run(self.synthesize(text, voice_config, output_path))
+        asyncio.run(self._synthesize_with_fallback(text, voice_config, output_path))
 
 
 class AssetGenerator:
