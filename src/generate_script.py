@@ -1,39 +1,8 @@
-# 顶部新增
-try:
-    from openai import OpenAI
-    SILICONFLOW_AVAILABLE = True
-except ImportError:
-    SILICONFLOW_AVAILABLE = False
-
-class ScriptGenerator:
-    def __init__(self, api_key: str, siliconflow_key: str = None):
-        self.siliconflow_key = siliconflow_key or os.getenv("SILICONFLOW_API_KEY")
-        self.use_siliconflow = SILICONFLOW_AVAILABLE and bool(self.siliconflow_key)
-        if self.use_siliconflow:
-            self.sf_client = OpenAI(
-                api_key=self.siliconflow_key,
-                base_url="https://api.siliconflow.cn/v1"  # OpenAI 兼容端点
-            )
-            self.sf_model = "Qwen/Qwen2.5-72B-Instruct"  # 或 Qwen/Qwen2.5-32B-Instruct
-            logger.info("使用 SiliconFlow (Qwen2.5-72B) 生成脚本")
-        # ... 其余回退逻辑不变
-    
-    def _generate_with_siliconflow(self, system_prompt, user_prompt, topic):
-        response = self.sf_client.chat.completions.create(
-            model=self.sf_model,
-            messages=[{"role": "system", "content": system_prompt},
-                      {"role": "user", "content": user_prompt}],
-            temperature=0.8,
-            max_tokens=4096,
-            response_format={"type": "json_object"}
-        )
-        script = json.loads(response.choices[0].message.content)
-        script["topic"] = topic
-        return self._validate_and_fix(script)
-"""文案生成模块 - 使用 Gemini 生成结构化短视频脚本"""
+"""文案生成模块 - 优先 SiliconFlow (Qwen2.5-72B)，回退 Gemini"""
 import json
 import logging
 import random
+import os
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from utils import load_yaml, ROOT_DIR, CONFIG_DIR, retry_with_backoff
@@ -41,7 +10,15 @@ from compliance import ComplianceChecker
 
 logger = logging.getLogger(__name__)
 
-# 尝试新版 google-genai SDK（推荐），回退到旧版
+# --- SiliconFlow (优先，国内直连，OpenAI 兼容) ---
+try:
+    from openai import OpenAI
+    SILICONFLOW_AVAILABLE = True
+except ImportError:
+    SILICONFLOW_AVAILABLE = False
+    logger.warning("openai 未安装，将尝试 Gemini")
+
+# --- Gemini (回退) ---
 try:
     from google import genai
     GENAI_NEW = True
@@ -56,33 +33,39 @@ except ImportError:
 
 
 class ScriptGenerator:
-    """脚本生成器"""
+    """脚本生成器：SiliconFlow 优先 → Gemini 回退"""
 
-    def __init__(self, api_key: str):
-        if GENAI_NEW:
-            # 新版 SDK: google-genai
-            self.client = genai.Client(api_key=api_key)
-            # 尝试多个模型名，按优先级排序
-            self.model_names = [
-                'gemini-1.5-flash-002',    # 稳定版
-                'gemini-1.5-pro-002',      # 稳定版 Pro
-                'gemini-1.0-pro',          # 旧版稳定
-                'gemini-1.5-flash',        # 通用名
-                'gemini-2.0-flash-exp',    # 实验版
-            ]
-            self.model_name = self.model_names[0]
+    def __init__(self, api_key: str, siliconflow_key: str = None):
+        self.gemini_key = api_key
+        self.siliconflow_key = siliconflow_key or os.getenv("SILICONFLOW_API_KEY")
+        
+        # 优先判断是否用 SiliconFlow
+        self.use_siliconflow = SILICONFLOW_AVAILABLE and bool(self.siliconflow_key)
+        if self.use_siliconflow:
+            self.sf_client = OpenAI(
+                api_key=self.siliconflow_key,
+                base_url="https://api.siliconflow.cn/v1"
+            )
+            self.sf_model = "Qwen/Qwen2.5-72B-Instruct"
+            logger.info("使用 SiliconFlow (Qwen2.5-72B) 生成脚本")
         else:
-            # 旧版 SDK: google-generativeai (已弃用)
-            if genai_old is None:
-                raise RuntimeError("请安装 google-genai: pip install google-genai")
-            genai_old.configure(api_key=api_key)
-            self.model = genai_old.GenerativeModel('gemini-1.5-flash')
+            logger.info("SiliconFlow 不可用，回退 Gemini")
+            if GENAI_NEW:
+                self.gemini_client = genai.Client(api_key=api_key)
+                self.model_names = [
+                    'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro'
+                ]
+            else:
+                if genai_old is None:
+                    raise RuntimeError("请安装 google-genai 或 openai (用于 SiliconFlow)")
+                genai_old.configure(api_key=api_key)
+                self.gemini_model = genai_old.GenerativeModel('gemini-1.5-flash')
+        
         self.templates = load_yaml(CONFIG_DIR / "prompt_templates.yaml")
         self.topics = self._load_topics()
         self.compliance = ComplianceChecker()
 
     def _load_topics(self) -> List[str]:
-        """加载种子选题库"""
         default_topics = [
             "老伴离世半年，独自种下的桃树今年开花了",
             "退休教师捡到流浪猫，照顾过程治愈了自己",
@@ -134,97 +117,101 @@ class ScriptGenerator:
     def generate_script(self, topic: str) -> Dict[str, Any]:
         system_prompt = self.templates["script_generation"]["system_prompt"]
         user_prompt = self.templates["script_generation"]["user_prompt"].replace("{{topic}}", topic)
-
         logger.info(f"生成脚本: {topic[:30]}...")
 
+        if self.use_siliconflow:
+            return self._generate_with_siliconflow(system_prompt, user_prompt, topic)
+        else:
+            return self._generate_with_gemini(system_prompt, user_prompt, topic)
+
+    def _generate_with_siliconflow(self, system_prompt: str, user_prompt: str, topic: str) -> Dict[str, Any]:
+        """SiliconFlow 极速生成，原生 JSON 模式"""
+        response = self.sf_client.chat.completions.create(
+            model=self.sf_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.8,
+            max_tokens=4096,
+            response_format={"type": "json_object"}
+        )
+        script = json.loads(response.choices[0].message.content)
+        script["topic"] = topic
+        return self._validate_and_fix(script)
+
+    def _generate_with_gemini(self, system_prompt: str, user_prompt: str, topic: str) -> Dict[str, Any]:
+        """Gemini 回退：多模型名尝试"""
         if GENAI_NEW:
-            # 新版 SDK：尝试多个模型名
             from google.genai import types
             last_error = None
             for model_name in self.model_names:
                 try:
-                    logger.info(f"尝试模型: {model_name}")
-                    response = self.client.models.generate_content(
+                    logger.info(f"尝试 Gemini 模型: {model_name}")
+                    response = self.gemini_client.models.generate_content(
                         model=model_name,
                         contents=[system_prompt, user_prompt],
                         config=types.GenerateContentConfig(
-                            temperature=0.8,
-                            top_p=0.9,
-                            top_k=40,
-                            max_output_tokens=4096,
-                            response_mime_type="application/json"
+                            temperature=0.8, top_p=0.9, top_k=40,
+                            max_output_tokens=4096, response_mime_type="application/json"
                         )
                     )
                     script = json.loads(response.text)
-                    logger.info(f"模型 {model_name} 调用成功")
+                    logger.info(f"Gemini 模型 {model_name} 成功")
                     break
                 except Exception as e:
                     last_error = e
-                    logger.warning(f"模型 {model_name} 调用失败: {e}")
-                    continue
+                    logger.warning(f"Gemini {model_name} 失败: {e}")
             else:
-                # 所有模型都失败了
-                raise last_error or RuntimeError("所有模型均调用失败")
+                raise last_error or RuntimeError("所有 Gemini 模型失败")
         else:
-            # 旧版 SDK
-            response = self.model.generate_content(
+            response = self.gemini_model.generate_content(
                 [system_prompt, user_prompt],
                 generation_config=genai_old.GenerationConfig(
-                    temperature=0.8,
-                    top_p=0.9,
-                    top_k=40,
-                    max_output_tokens=4096,
-                    response_mime_type="application/json"
+                    temperature=0.8, top_p=0.9, top_k=40,
+                    max_output_tokens=4096, response_mime_type="application/json"
                 )
             )
             script = json.loads(response.text)
-
+        
         script["topic"] = topic
-        script = self._validate_and_fix(script)
-        return script
+        return self._validate_and_fix(script)
 
     def _validate_and_fix(self, script: Dict[str, Any]) -> Dict[str, Any]:
         required = ["title", "cover_title", "cover_subtitle", "scenes", "bgm_mood", "tags"]
         for field in required:
             if field not in script:
                 script[field] = "" if field != "scenes" else []
-
         scenes = script.get("scenes", [])
         while len(scenes) < 6:
             scenes.append({
-                "index": len(scenes) + 1,
-                "duration": 5,
+                "index": len(scenes) + 1, "duration": 5,
                 "narration": "画面待补充",
                 "image_prompt": "elderly person, warm lighting, cinematic",
                 "video_prompt": "slow camera pan, gentle motion",
                 "subtitle": "待补充"
             })
         script["scenes"] = scenes[:6]
-
         for i, scene in enumerate(script["scenes"]):
             scene["index"] = i + 1
             scene["duration"] = 5
-
         return script
 
     def generate_with_compliance(self, topic: str, max_retries: int = 3) -> Dict[str, Any]:
         for attempt in range(max_retries):
             script = self.generate_script(topic)
             compliance_result = self.compliance.check_script(script)
-
             if compliance_result["passed"]:
                 logger.info(f"脚本合规通过: {topic[:30]}")
                 script["compliance"] = compliance_result
                 return script
             else:
-                logger.warning(f"脚本合规不通过 (尝试 {attempt+1}/{max_retries}): {compliance_result['high_count']} 个高危问题")
+                logger.warning(f"合规不通过 (尝试 {attempt+1}/{max_retries}): {compliance_result['high_count']} 高危")
                 for issue in compliance_result["issues"]:
                     if issue["severity"] == "high":
                         logger.warning(f"  - {issue['detail']} @ {issue['location']}")
-
                 if attempt < max_retries - 1:
                     topic = self.pick_topic([topic])
-
         script["compliance"] = compliance_result
         script["compliance_warning"] = "合规检查未通过，请人工复核"
         return script
@@ -234,13 +221,12 @@ if __name__ == "__main__":
     import os
     from dotenv import load_dotenv
     load_dotenv()
-
     api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        print("请设置 GEMINI_API_KEY 环境变量")
+    sf_key = os.getenv("SILICONFLOW_API_KEY")
+    if not api_key and not sf_key:
+        print("请设置 GEMINI_API_KEY 或 SILICONFLOW_API_KEY")
         exit(1)
-
-    generator = ScriptGenerator(api_key)
+    generator = ScriptGenerator(api_key or "", sf_key)
     topic = generator.pick_topic()
     script = generator.generate_with_compliance(topic)
     print(json.dumps(script, ensure_ascii=False, indent=2))
