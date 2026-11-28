@@ -267,14 +267,13 @@ class TTSGenerator:
     def __init__(self):
         self.voices_config = self._load_voices()
         # 按优先级排序的备选音色（仅包含 GitHub Actions 环境确认可用的音色）
-        # 实测可用：Xiaoxiao, Xiaoyi, Xiaohan, Yunxi
-        # 不可用：Yunyang, Yunhao
+        # 实测可用：Xiaoxiao, Xiaoyi, Xiaohan
+        # 不可用：Yunxi, Yunyang, Yunhao
         self.fallback_voices = [
             "zh-CN-Xiaoxiao",    # 慈祥女声 - 实测可用
             "zh-CN-Xiaoyi",      # 知性女声 - 实测可用
             "zh-CN-Xiaohan",     # 深情女声 - 实测可用
-            "zh-CN-Yunxi",       # 磁性男声 - 实测可用
-            # zh-CN-Yunyang, zh-CN-Yunhao 在 GitHub Actions 环境中不可用，已移除
+            # zh-CN-Yunxi, zh-CN-Yunyang, zh-CN-Yunhao 在 GitHub Actions 环境中不可用，已移除
         ]
 
     def _load_voices(self) -> Dict:
@@ -313,7 +312,7 @@ class TTSGenerator:
         
         # 确保至少有一个音色可尝试
         if not voice_names:
-            voice_names = ["zh-CN-Xiaoxiao", "zh-CN-Xiaoyi", "zh-CN-Xiaohan", "zh-CN-Yunxi"]
+            voice_names = ["zh-CN-Xiaoxiao", "zh-CN-Xiaoyi", "zh-CN-Xiaohan"]
         
         last_error = RuntimeError("未知错误：未尝试任何音色")
         

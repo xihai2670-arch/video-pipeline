@@ -90,11 +90,13 @@ voices:
       description: "四川话，适合巴蜀风情/茶馆故事类"
 
 # 默认音色策略：按故事类型自动匹配
+# 注意：GitHub Actions 环境仅确认 Xiaoxiao, Xiaoyi, Xiaohan 可用
+# Yunxi, Yunyang, Yunhao 在 GitHub Actions 中不可用
 default_strategy:
   "亲情温情": "zh-CN-Xiaoxiao"
-  "生活智慧": "zh-CN-Yunxi"
-  "时代记忆": "zh-CN-Yunyang"
-  "default": "zh-CN-Yunxi"
+  "生活智慧": "zh-CN-Xiaohan"
+  "时代记忆": "zh-CN-Xiaoyi"
+  "default": "zh-CN-Xiaoxiao"
 
 # 语速参考：中老年受众建议 -5% 到 -10%
 # 音量建议：+0% 到 +5%（确保清晰）
