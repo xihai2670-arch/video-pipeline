@@ -72,20 +72,41 @@ class SiliconFlowImageGenerator:
             api_key=api_key,
             base_url="https://api.siliconflow.cn/v1"
         )
-        self.model = "black-forest-labs/FLUX.1-schnell"
+        # 尝试多个模型（按优先级，避免单个模型被禁用）
+        self.models = [
+            "stabilityai/stable-diffusion-xl-base-1.0",  # SDXL 基础版，通常可用
+            "stabilityai/sdxl-turbo",                     # SDXL Turbo，快
+            "Kwai-Kolors/Kolors",                          # 可图，中文友好
+            "black-forest-labs/FLUX.1-dev",               # FLUX.1-dev 备选
+        ]
+        self.current_model_idx = 0
 
     @retry_with_backoff(max_attempts=3, base_delay=3.0)
     def generate(self, prompt: str, width: int = 1024, height: int = 1820) -> bytes:
         """生成图片，返回二进制数据"""
-        response = self.client.images.generate(
-            model=self.model,
-            prompt=prompt,
-            size=f"{width}x{height}",
-            response_format="b64_json",
-            n=1
-        )
-        image_b64 = response.data[0].b64_json
-        return base64.b64decode(image_b64)
+        last_error = None
+        for model in self.models:
+            try:
+                logger.info(f"尝试 SiliconFlow 模型: {model}")
+                response = self.client.images.generate(
+                    model=model,
+                    prompt=prompt,
+                    size=f"{width}x{height}",
+                    response_format="b64_json",
+                    n=1
+                )
+                image_b64 = response.data[0].b64_json
+                logger.info(f"SiliconFlow 模型 {model} 生成成功")
+                return base64.b64decode(image_b64)
+            except Exception as e:
+                last_error = e
+                logger.warning(f"SiliconFlow 模型 {model} 失败: {e}")
+                # 如果是 403 Model disabled，尝试下一个模型
+                if "403" in str(e) or "Model disabled" in str(e) or "disabled" in str(e).lower():
+                    continue
+                # 其他错误也尝试下一个模型
+                continue
+        raise last_error or RuntimeError("所有 SiliconFlow 模型均失败")
 
 
 class CloudflareImageGenerator:
