@@ -262,19 +262,19 @@ class VideoGenerator:
 
 
 class TTSGenerator:
-    """Edge TTS 本地语音合成 - 多音色回退"""
+    """Edge TTS 本地语音合成 - 多音色回退（仅含 GitHub Actions 确认可用的音色）"""
 
     def __init__(self):
         self.voices_config = self._load_voices()
-        # 按优先级排序的备选音色（仅包含 edge-tts 确定可用的音色）
-        # 参考: https://github.com/rany2/edge-tts/blob/master/edge_tts/voices.py
+        # 按优先级排序的备选音色（仅包含 GitHub Actions 环境确认可用的音色）
+        # 实测可用：Xiaoxiao, Xiaoyi, Xiaohan, Yunxi
+        # 不可用：Yunyang, Yunhao
         self.fallback_voices = [
-            "zh-CN-Xiaoxiao",    # 慈祥女声
-            "zh-CN-Xiaoyi",      # 知性女声
-            "zh-CN-Xiaohan",     # 深情女声
-            "zh-CN-Yunxi",       # 磁性男声
-            "zh-CN-Yunyang",     # 稳重男声
-            # zh-CN-Yunhao 在某些版本中不可用，已移除
+            "zh-CN-Xiaoxiao",    # 慈祥女声 - 实测可用
+            "zh-CN-Xiaoyi",      # 知性女声 - 实测可用
+            "zh-CN-Xiaohan",     # 深情女声 - 实测可用
+            "zh-CN-Yunxi",       # 磁性男声 - 实测可用
+            # zh-CN-Yunyang, zh-CN-Yunhao 在 GitHub Actions 环境中不可用，已移除
         ]
 
     def _load_voices(self) -> Dict:
@@ -284,7 +284,7 @@ class TTSGenerator:
 
     def pick_voice(self, topic_category: str = "default") -> Dict:
         strategy = self.voices_config.get("default_strategy", {})
-        preferred_name = strategy.get(topic_category, strategy.get("default", "zh-CN-Yunxi"))
+        preferred_name = strategy.get(topic_category, strategy.get("default", "zh-CN-Xiaoxiao"))
         
         # 先尝试首选音色
         for category in ["warm_male", "warm_female", "dialect"]:
@@ -303,7 +303,7 @@ class TTSGenerator:
                         return v
         
         # 兜底：返回第一个可用的
-        return self.voices_config["voices"]["warm_male"][0]
+        return self.voices_config["voices"]["warm_female"][0]
 
     async def _synthesize_with_fallback(self, text: str, voice_config: Dict, output_path: Path) -> None:
         """尝试多个音色合成，直到成功"""
@@ -313,7 +313,7 @@ class TTSGenerator:
         
         # 确保至少有一个音色可尝试
         if not voice_names:
-            voice_names = ["zh-CN-Xiaoxiao", "zh-CN-Xiaoyi", "zh-CN-Xiaohan", "zh-CN-Yunxi", "zh-CN-Yunyang", "zh-CN-Yunhao"]
+            voice_names = ["zh-CN-Xiaoxiao", "zh-CN-Xiaoyi", "zh-CN-Xiaohan", "zh-CN-Yunxi"]
         
         last_error = RuntimeError("未知错误：未尝试任何音色")
         
@@ -531,6 +531,7 @@ if __name__ == "__main__":
         print("请设置 SILICONFLOW_API_KEY 或 CF_ACCOUNT_ID+CF_API_TOKEN")
         exit(1)
 
+    # 测试配图
     img_gen = ImageGenerator(siliconflow_key=sf_key, cf_account_id=cf_id, cf_api_token=cf_token)
     img = img_gen.generate("elderly couple drinking tea in garden, warm sunset, cinematic")
     Path("test_image.png").write_bytes(img)
