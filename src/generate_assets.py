@@ -1,10 +1,12 @@
-"""素材生成模块 - 图片、视频、音频并发生成 (最终版：全模型回退+容错)"""
+"""素材生成模块 - 图片、视频、音频并发生成 (最终版：全容错+视频生成兜底)"""
 import os
 import json
 import logging
 import asyncio
 import base64
 import hashlib
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
@@ -23,7 +25,6 @@ except ImportError as e:
 
 @dataclass
 class AssetPaths:
-    """单条视频的素材路径集合"""
     run_dir: Path
     script: Dict[str, Any]
 
@@ -72,7 +73,7 @@ class SiliconFlowImageGenerator:
             api_key=api_key,
             base_url="https://api.siliconflow.cn/v1",
             timeout=60.0,
-            max_retries=0  # 我们自己处理重试
+            max_retries=0
         )
         # 按可用性排序：Kolors(中文友好) > SDXL > SDXL-Turbo > FLUX.1-dev
         self.models = [
@@ -83,7 +84,6 @@ class SiliconFlowImageGenerator:
         ]
 
     def generate(self, prompt: str, width: int = 1024, height: int = 1820) -> bytes:
-        """生成图片，内置多模型回退 + 响应格式兼容"""
         last_error = None
         
         for model in self.models:
@@ -97,17 +97,14 @@ class SiliconFlowImageGenerator:
                     n=1
                 )
                 
-                # 兼容不同响应格式
                 image_b64 = None
                 image_url = None
                 
                 if response.data and len(response.data) > 0:
                     data = response.data[0]
                     
-                    # 优先尝试 b64_json
                     if hasattr(data, 'b64_json') and data.b64_json:
                         image_b64 = data.b64_json
-                    # 备选：url 字段
                     elif hasattr(data, 'url') and data.url:
                         image_url = data.url
                 
@@ -127,8 +124,6 @@ class SiliconFlowImageGenerator:
             except Exception as e:
                 error_str = str(e)
                 logger.warning(f"SiliconFlow 模型 {model} 失败: {e}")
-                
-                # 任何错误都尝试下一个模型（包括 403、400、网络错误等）
                 if "403" in error_str or "Model disabled" in error_str or "disabled" in error_str.lower() \
                    or "400" in error_str or "401" in error_str or "429" in error_str:
                     continue
@@ -161,10 +156,8 @@ class CloudflareImageGenerator:
                 logger.info(f"尝试 Cloudflare 模型: {model}")
                 url = f"{self.base_url}/{model}"
                 
-                # Cloudflare 通常支持正方形，强制正方形避免 400
                 cf_size = min(max(width, height), 1024)
                 cf_size = max(cf_size, 512)
-                # 对齐到 64 的倍数
                 cf_size = (cf_size // 64) * 64
                 
                 payload = {
@@ -179,7 +172,6 @@ class CloudflareImageGenerator:
                 
                 if response.status_code == 400:
                     logger.warning(f"Cloudflare 400: {response.text[:200]}")
-                    # 简化参数重试
                     simple_payload = {"prompt": prompt}
                     response = requests.post(url, headers=self.headers, json=simple_payload, timeout=60)
                 
@@ -232,23 +224,23 @@ class ImageGenerator:
 
 
 class VideoGenerator:
-    """Hugging Face Inference API 图生视频"""
+    """视频生成：HF Inference API 优先，失败则本地 ffmpeg 合成图片序列动画"""
 
     def __init__(self, hf_token: str):
         self.client = InferenceClient(token=hf_token, timeout=300)
+        # 只保留免费可用的模型
         self.models = [
             "Lightricks/LTX-Video",
-            "THUDM/CogVideoX-2b",
-            "WanVideo/Wan2.1-I2V-14B-480P",
         ]
 
     @retry_with_backoff(max_attempts=2, base_delay=10.0)
     def generate_i2v(self, image_bytes: bytes, prompt: str, model_idx: int = 0) -> bytes:
         if model_idx >= len(self.models):
-            raise RuntimeError("所有视频模型均尝试失败")
+            logger.warning("HF 视频模型均不可用，将使用本地 ffmpeg 合成图片序列动画")
+            return None  # 返回 None 触发本地合成兜底
 
         model = self.models[model_idx]
-        logger.info(f"使用模型生成视频: {model}")
+        logger.info(f"尝试 HF 视频模型: {model}")
 
         try:
             video_bytes = self.client.image_to_video(
@@ -264,8 +256,9 @@ class VideoGenerator:
             )
             return video_bytes
         except Exception as e:
-            logger.warning(f"模型 {model} 失败: {e}, 尝试下一个")
-            return self.generate_i2v(image_bytes, prompt, model_idx + 1)
+            logger.warning(f"HF 视频模型 {model} 失败: {e}")
+            # 直接返回 None，触发本地合成
+            return None
 
 
 class TTSGenerator:
@@ -314,6 +307,37 @@ class AssetGenerator:
         self.video_gen = VideoGenerator(hf_token)
         self.tts_gen = TTSGenerator()
 
+    def _local_video_from_image(self, image_bytes: bytes, output_path: Path, duration: int = 5):
+        """从单张图片生成视频：缩放+淡入淡出+缩放动画"""
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_img:
+            tmp_img.write(image_bytes)
+            tmp_img_path = tmp_img.name
+        
+        try:
+            # 使用 ffmpeg 生成视频：缩放填充 + 缓慢缩放动画 + 淡入淡出
+            cmd = [
+                "ffmpeg", "-y",
+                "-loop", "1", "-i", tmp_img_path,
+                "-vf", (
+                    f"scale=1080:1920:force_original_aspect_ratio=increase,"
+                    f"crop=1080:1920,"
+                    f"zoompan=z='min(zoom+0.0015,1.15)':d={duration*30}:s=1080x1920,"
+                    f"fade=t=in:st=0:d=1,fade=t=out:st={duration-1}:d=1,"
+                    f"setsar=1"
+                ),
+                "-t", str(duration),
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-pix_fmt", "yuv420p",
+                "-r", "30",
+                str(output_path)
+            ]
+            subprocess.run(cmd, check=True, capture_output=True)
+        finally:
+            try:
+                os.unlink(tmp_img_path)
+            except:
+                pass
+
     def generate_all(self, script: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         assets = AssetPaths(run_dir, script)
         scenes = script["scenes"]
@@ -331,7 +355,7 @@ class AssetGenerator:
                     logger.warning(f"场景 {i+1} 配图合规不通过: {check_result['issues']}")
             image_paths.append(str(img_path))
 
-        # 2. 生成视频片段
+        # 2. 生成视频片段（HF 失败则本地合成）
         logger.info("生成视频片段...")
         video_paths = []
         for i, scene in enumerate(scenes):
@@ -339,7 +363,15 @@ class AssetGenerator:
             if not vid_path.exists():
                 img_bytes = Path(image_paths[i]).read_bytes()
                 vid_bytes = self.video_gen.generate_i2v(img_bytes, scene["video_prompt"])
-                vid_path.write_bytes(vid_bytes)
+                
+                if vid_bytes is None:
+                    # 本地 ffmpeg 合成：从单张图片生成 5 秒视频（缩放+淡入淡出）
+                    logger.info(f"场景 {i+1} 使用本地 ffmpeg 合成视频...")
+                    self._local_video_from_image(img_bytes, vid_path, duration=5)
+                    vid_bytes = vid_path.read_bytes()
+                else:
+                    vid_path.write_bytes(vid_bytes)
+                
                 check_result = check_video_compliance(vid_path)
                 if not check_result["passed"]:
                     logger.warning(f"场景 {i+1} 视频合规不通过: {check_result['issues']}")
@@ -390,7 +422,6 @@ class AssetGenerator:
         return f"{script['cover_title']}, {script['cover_subtitle']}, {script['title']}, warm nostalgic cinematic lighting, 3:4 aspect ratio, space for text overlay"
 
     def _prepare_bgm(self, mood: str, output_path: Path) -> None:
-        import subprocess
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
             "-t", "30", "-c:a", "libmp3lame", "-b:a", "128k", str(output_path)
