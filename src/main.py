@@ -37,12 +37,15 @@ class DailyVideoPipeline:
         self.cf_account_id = os.getenv("CF_ACCOUNT_ID")
         self.cf_api_token = os.getenv("CF_API_TOKEN")
         self.hf_token = os.getenv("HF_TOKEN")
+        self.siliconflow_key = os.getenv("SILICONFLOW_API_KEY")
 
         self._validate_env()
 
         # 初始化组件
         self.script_gen = ScriptGenerator(self.gemini_key)
-        self.asset_gen = AssetGenerator(self.cf_account_id, self.cf_api_token, self.hf_token)
+        self.asset_gen = AssetGenerator(
+            self.cf_account_id, self.cf_api_token, self.hf_token, self.siliconflow_key
+        )
         self.video_composer = VideoComposer()
         self.compliance = ComplianceChecker()
 
@@ -53,12 +56,15 @@ class DailyVideoPipeline:
     def _validate_env(self):
         """验证环境变量"""
         missing = []
-        if not self.gemini_key:
-            missing.append("GEMINI_API_KEY")
-        if not self.cf_account_id:
-            missing.append("CF_ACCOUNT_ID")
-        if not self.cf_api_token:
-            missing.append("CF_API_TOKEN")
+        # SiliconFlow 现在是可选的（有回退）
+        # 必须至少有一个图片生成服务可用
+        has_siliconflow = bool(os.getenv("SILICONFLOW_API_KEY"))
+        has_cloudflare = bool(self.cf_account_id and self.cf_api_token)
+        
+        if not self.gemini_key and not os.getenv("SILICONFLOW_API_KEY"):
+            missing.append("GEMINI_API_KEY (或 SILICONFLOW_API_KEY)")
+        if not has_siliconflow and not (self.cf_account_id and self.cf_api_token):
+            missing.append("CF_ACCOUNT_ID + CF_API_TOKEN (或 SILICONFLOW_API_KEY)")
         if not self.hf_token:
             missing.append("HF_TOKEN")
         if missing:

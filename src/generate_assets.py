@@ -17,6 +17,7 @@ try:
     import requests
     from huggingface_hub import InferenceClient
     import edge_tts
+    from openai import OpenAI
 except ImportError as e:
     logger.warning(f"依赖缺失: {e}")
 
@@ -63,8 +64,32 @@ class AssetPaths:
         return self.run_dir / "bgm.mp3"
 
 
-class ImageGenerator:
-    """Cloudflare Workers AI 文生图"""
+class SiliconFlowImageGenerator:
+    """SiliconFlow 文生图 (OpenAI 兼容 API，国内直连)"""
+
+    def __init__(self, api_key: str):
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.siliconflow.cn/v1"
+        )
+        self.model = "black-forest-labs/FLUX.1-schnell"
+
+    @retry_with_backoff(max_attempts=3, base_delay=3.0)
+    def generate(self, prompt: str, width: int = 1024, height: int = 1820) -> bytes:
+        """生成图片，返回二进制数据"""
+        response = self.client.images.generate(
+            model=self.model,
+            prompt=prompt,
+            size=f"{width}x{height}",
+            response_format="b64_json",
+            n=1
+        )
+        image_b64 = response.data[0].b64_json
+        return base64.b64decode(image_b64)
+
+
+class CloudflareImageGenerator:
+    """Cloudflare Workers AI 文生图 (备选)"""
 
     def __init__(self, account_id: str, api_token: str):
         self.account_id = account_id
@@ -74,7 +99,6 @@ class ImageGenerator:
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json"
         }
-        # FLUX.1-schnell 模型
         self.model = "@cf/black-forest-labs/flux-1-schnell"
 
     @retry_with_backoff(max_attempts=3, base_delay=3.0)
@@ -85,7 +109,7 @@ class ImageGenerator:
             "prompt": prompt,
             "width": width,
             "height": height,
-            "num_inference_steps": 4,  # schnell 只需 4 步
+            "num_inference_steps": 4,
             "guidance_scale": 3.5
         }
         response = requests.post(url, headers=self.headers, json=payload, timeout=60)
@@ -93,9 +117,40 @@ class ImageGenerator:
         result = response.json()
         if not result.get("success"):
             raise RuntimeError(f"Cloudflare AI 返回错误: {result}")
-        # 返回 base64 解码后的图片
         image_b64 = result["result"]["image"]
         return base64.b64decode(image_b64)
+
+
+class ImageGenerator:
+    """图片生成器：SiliconFlow 优先，Cloudflare 备选"""
+
+    def __init__(self, siliconflow_key: str = None, cf_account_id: str = None, cf_api_token: str = None):
+        self.generators = []
+        
+        # 优先 SiliconFlow
+        if siliconflow_key:
+            self.generators.append(("SiliconFlow", SiliconFlowImageGenerator(siliconflow_key)))
+        
+        # 备选 Cloudflare
+        if cf_account_id and cf_api_token:
+            self.generators.append(("Cloudflare", CloudflareImageGenerator(cf_account_id, cf_api_token)))
+        
+        if not self.generators:
+            raise RuntimeError("至少需要配置 SiliconFlow 或 Cloudflare 其中一个")
+
+    @retry_with_backoff(max_attempts=3, base_delay=3.0)
+    def generate(self, prompt: str, width: int = 1024, height: int = 1820) -> bytes:
+        """尝试所有生成器，直到成功"""
+        last_error = None
+        for name, gen in self.generators:
+            try:
+                logger.info(f"尝试 {name} 生成图片...")
+                return gen.generate(prompt, width, height)
+            except Exception as e:
+                last_error = e
+                logger.warning(f"{name} 生成失败: {e}")
+                continue
+        raise last_error or RuntimeError("所有图片生成器均失败")
 
 
 class VideoGenerator:
@@ -103,16 +158,14 @@ class VideoGenerator:
 
     def __init__(self, hf_token: str):
         self.client = InferenceClient(token=hf_token, timeout=300)
-        # 模型优先级
         self.models = [
-            "Lightricks/LTX-Video",           # 最快、最省配额
-            "THUDM/CogVideoX-2b",             # 备选
-            "WanVideo/Wan2.1-I2V-14B-480P",   # 高质量备选
+            "Lightricks/LTX-Video",
+            "THUDM/CogVideoX-2b",
+            "WanVideo/Wan2.1-I2V-14B-480P",
         ]
 
     @retry_with_backoff(max_attempts=2, base_delay=10.0)
     def generate_i2v(self, image_bytes: bytes, prompt: str, model_idx: int = 0) -> bytes:
-        """图生视频，返回 MP4 二进制"""
         if model_idx >= len(self.models):
             raise RuntimeError("所有视频模型均尝试失败")
 
@@ -120,14 +173,11 @@ class VideoGenerator:
         logger.info(f"使用模型生成视频: {model}")
 
         try:
-            # HF Inference API 的 text_to_video / image_to_video
-            # 注意：不同模型参数不同，这里用通用方式
             video_bytes = self.client.image_to_video(
                 image=image_bytes,
                 prompt=prompt,
                 model=model,
-                # LTX-Video 参数
-                num_frames=25,      # 5秒 * 5fps (LTX 通常 5-8fps)
+                num_frames=25,
                 fps=5,
                 width=512,
                 height=512,
@@ -152,19 +202,15 @@ class TTSGenerator:
             return yaml.safe_load(f)
 
     def pick_voice(self, topic_category: str = "default") -> Dict:
-        """根据话题类别选择音色"""
         strategy = self.voices_config.get("default_strategy", {})
         voice_name = strategy.get(topic_category, strategy.get("default", "zh-CN-Yunxi"))
-        # 查找完整配置
         for category in ["warm_male", "warm_female", "dialect"]:
             for v in self.voices_config["voices"][category]:
                 if v["name"] == voice_name:
                     return v
-        # 兜底
         return self.voices_config["voices"]["warm_male"][0]
 
     async def synthesize(self, text: str, voice_config: Dict, output_path: Path) -> None:
-        """合成语音到文件"""
         communicate = edge_tts.Communicate(
             text=text,
             voice=voice_config["name"],
@@ -175,24 +221,26 @@ class TTSGenerator:
         await communicate.save(str(output_path))
 
     def synthesize_sync(self, text: str, voice_config: Dict, output_path: Path) -> None:
-        """同步包装"""
         asyncio.run(self.synthesize(text, voice_config, output_path))
 
 
 class AssetGenerator:
     """素材生成总调度"""
 
-    def __init__(self, cf_account_id: str, cf_api_token: str, hf_token: str):
-        self.image_gen = ImageGenerator(cf_account_id, cf_api_token)
+    def __init__(self, cf_account_id: str, cf_api_token: str, hf_token: str, siliconflow_key: str = None):
+        self.image_gen = ImageGenerator(
+            siliconflow_key=siliconflow_key,
+            cf_account_id=cf_account_id,
+            cf_api_token=cf_api_token
+        )
         self.video_gen = VideoGenerator(hf_token)
         self.tts_gen = TTSGenerator()
 
     def generate_all(self, script: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
-        """生成所有素材，返回路径映射"""
         assets = AssetPaths(run_dir, script)
         scenes = script["scenes"]
 
-        # 1. 并发生成配图
+        # 1. 生成配图
         logger.info("生成分镜配图...")
         image_paths = []
         for i, scene in enumerate(scenes):
@@ -200,13 +248,12 @@ class AssetGenerator:
             if not img_path.exists():
                 img_bytes = self.image_gen.generate(scene["image_prompt"])
                 img_path.write_bytes(img_bytes)
-                # 合规检查
                 check_result = check_image_compliance(img_path)
                 if not check_result["passed"]:
                     logger.warning(f"场景 {i+1} 配图合规不通过: {check_result['issues']}")
             image_paths.append(str(img_path))
 
-        # 2. 并发生成视频片段（串行避免配额耗尽）
+        # 2. 生成视频片段
         logger.info("生成视频片段...")
         video_paths = []
         for i, scene in enumerate(scenes):
@@ -215,7 +262,6 @@ class AssetGenerator:
                 img_bytes = Path(image_paths[i]).read_bytes()
                 vid_bytes = self.video_gen.generate_i2v(img_bytes, scene["video_prompt"])
                 vid_path.write_bytes(vid_bytes)
-                # 合规检查
                 check_result = check_video_compliance(vid_path)
                 if not check_result["passed"]:
                     logger.warning(f"场景 {i+1} 视频合规不通过: {check_result['issues']}")
@@ -239,7 +285,7 @@ class AssetGenerator:
             cover_bytes = self.image_gen.generate(cover_prompt, width=1080, height=1440)
             cover_path.write_bytes(cover_bytes)
 
-        # 5. 准备 BGM（占位：使用免费素材库或静音）
+        # 5. 准备 BGM
         bgm_path = assets.bgm_path()
         if not bgm_path.exists():
             self._prepare_bgm(script["bgm_mood"], bgm_path)
@@ -255,7 +301,6 @@ class AssetGenerator:
         }
 
     def _infer_category(self, script: Dict[str, Any]) -> str:
-        """从标题/标签推断话题类别"""
         text = script.get("title", "") + " " + " ".join(script.get("tags", []))
         if any(kw in text for kw in ["亲", "爱", "情", "孙", "子", "女", "夫", "妻", "伴"]):
             return "亲情温情"
@@ -264,14 +309,9 @@ class AssetGenerator:
         return "时代记忆"
 
     def _build_cover_prompt(self, script: Dict[str, Any]) -> str:
-        """构建封面提示词"""
-        templates = __import__('utils').load_yaml(CONFIG_DIR / "prompt_templates.yaml")
-        # 简化：直接拼接关键元素
         return f"{script['cover_title']}, {script['cover_subtitle']}, {script['title']}, warm nostalgic cinematic lighting, 3:4 aspect ratio, space for text overlay"
 
     def _prepare_bgm(self, mood: str, output_path: Path) -> None:
-        """准备背景音乐（占位：生成静音文件，实际应接入免费 BGM 库）"""
-        # 生成 30 秒静音 MP3 作为占位
         import subprocess
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
@@ -285,17 +325,17 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
 
-    # 简单测试
     cf_id = os.getenv("CF_ACCOUNT_ID")
     cf_token = os.getenv("CF_API_TOKEN")
     hf_token = os.getenv("HF_TOKEN")
+    sf_key = os.getenv("SILICONFLOW_API_KEY")
 
-    if not all([cf_id, cf_token, hf_token]):
-        print("请设置环境变量")
+    if not any([sf_key, cf_id and cf_token]):
+        print("请设置 SILICONFLOW_API_KEY 或 CF_ACCOUNT_ID+CF_API_TOKEN")
         exit(1)
 
     # 测试配图
-    img_gen = ImageGenerator(cf_id, cf_token)
+    img_gen = ImageGenerator(siliconflow_key=sf_key, cf_account_id=cf_id, cf_api_token=cf_token)
     img = img_gen.generate("elderly couple drinking tea in garden, warm sunset, cinematic")
     Path("test_image.png").write_bytes(img)
     print("测试图片已生成: test_image.png")
