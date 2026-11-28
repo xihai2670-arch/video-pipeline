@@ -266,14 +266,15 @@ class TTSGenerator:
 
     def __init__(self):
         self.voices_config = self._load_voices()
-        # 按优先级排序的备选音色（按类别分组）
+        # 按优先级排序的备选音色（仅包含 edge-tts 确定可用的音色）
+        # 参考: https://github.com/rany2/edge-tts/blob/master/edge_tts/voices.py
         self.fallback_voices = [
             "zh-CN-Xiaoxiao",    # 慈祥女声
             "zh-CN-Xiaoyi",      # 知性女声
             "zh-CN-Xiaohan",     # 深情女声
             "zh-CN-Yunxi",       # 磁性男声
             "zh-CN-Yunyang",     # 稳重男声
-            "zh-CN-Yunhao",      # 亲切男声
+            # zh-CN-Yunhao 在某些版本中不可用，已移除
         ]
 
     def _load_voices(self) -> Dict:
