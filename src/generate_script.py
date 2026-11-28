@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 try:
     from google import genai
     GENAI_NEW = True
+    genai_old = None
 except ImportError:
     GENAI_NEW = False
     try:
@@ -38,6 +39,8 @@ class ScriptGenerator:
                 'gemini-2.0-flash-exp',    # 实验版
             ]
             self.model_name = self.model_names[0]
+        else:
+            # 旧版 SDK: google-generativeai (已弃用)
             if genai_old is None:
                 raise RuntimeError("请安装 google-genai: pip install google-genai")
             genai_old.configure(api_key=api_key)
@@ -130,6 +133,8 @@ class ScriptGenerator:
             else:
                 # 所有模型都失败了
                 raise last_error or RuntimeError("所有模型均调用失败")
+        else:
+            # 旧版 SDK
             response = self.model.generate_content(
                 [system_prompt, user_prompt],
                 generation_config=genai_old.GenerationConfig(
