@@ -306,9 +306,16 @@ class TTSGenerator:
 
     async def _synthesize_with_fallback(self, text: str, voice_config: Dict, output_path: Path) -> None:
         """尝试多个音色合成，直到成功"""
-        voice_names = [voice_config["name"]] + [v for v in self.fallback_voices if v != voice_config["name"]]
+        # 确保音色列表非空
+        primary_name = voice_config.get("name", "zh-CN-Xiaoxiao")
+        voice_names = [primary_name] + [v for v in self.fallback_voices if v != primary_name]
         
-        last_error = None
+        # 确保至少有一个音色可尝试
+        if not voice_names:
+            voice_names = ["zh-CN-Xiaoxiao", "zh-CN-Xiaoyi", "zh-CN-Xiaohan", "zh-CN-Yunxi", "zh-CN-Yunyang", "zh-CN-Yunhao"]
+        
+        last_error = RuntimeError("未知错误：未尝试任何音色")
+        
         for voice_name in voice_names:
             try:
                 logger.info(f"尝试 TTS 音色: {voice_name}")
@@ -323,6 +330,7 @@ class TTSGenerator:
                 logger.info(f"TTS 音色 {voice_name} 合成成功")
                 return
             except Exception as e:
+                last_error = e
                 logger.warning(f"TTS 音色 {voice_name} 失败: {e}")
                 continue
         
